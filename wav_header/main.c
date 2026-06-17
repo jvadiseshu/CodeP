@@ -1,5 +1,8 @@
 #include<stdio.h>
 #include<stdlib.h>
+#include <windows.h>   // Native Windows Definitions
+#include <mmsystem.h>  // Native Windows Multimedia Core
+
 #define DATA_READ_TIME_MSEC 10
 typedef struct waveheader
 {
@@ -45,32 +48,68 @@ void printmetadata(struct waveheader head)
 int main(void)
 {
   printf("hello...");
-  FILE *infile = fopen("1kHz_44100Hz_16bit_30sec.wav","r+");
-  
-  if(infile == NULL)
-	printf("\n Error in file open");
-  else
-	printf("\n File open sucess return = %p", infile);
+     FILE *infile = fopen("sin1000.wav", "rb");
+    if(!infile) { printf("\n Error file open"); return 1; }
 
-  metadata header;
-  int bytesread = fread(&header,1, sizeof(metadata),infile);
+    metadata header;
+    fread(&header, 1, sizeof(metadata), infile);
+    printmetadata(header);
 
-  printf("\n %s: bytes read from input file = %d", __func__, bytesread);
-  printmetadata(header);
-  
-  short *data = (short *) malloc(header.blockalign * (header.samplerate/1000) * DATA_READ_TIME_MSEC );
-  
-  //get a block align data
-  for(int i=0; i<10;i++)
-  {
-   bytesread = fread(data, 1, header.blockalign, infile);
-   printf("\ndata read in bytes = %d, data = %x",bytesread, *data);
-   data++;
-  }
+    // 1. Setup Windows Audio Format structure using your file metadata
+    WAVEFORMATEX wfx;
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = header.numberofchannel;
+    wfx.nSamplesPerSec = header.samplerate;
+    wfx.nAvgBytesPerSec = header.byterate;
+    wfx.nBlockAlign = header.blockalign;
+    wfx.wBitsPerSample = header.bitdepth;
+    wfx.cbSize = 0;
 
-    
- fclose(infile);
-  
-  return 0;
+    HWAVEOUT hWaveOut;
+    // Open the default windows wave playback device
+    if (waveOutOpen(&hWaveOut, WAVE_MAPPER, &wfx, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+        printf("Error opening Windows Audio Device\n");
+        return 1;
+    }
+
+    // 2. Allocate buffer
+    int frames_per_read = (header.samplerate / 1000) * DATA_READ_TIME_MSEC;
+    int bytes_per_read = frames_per_read * header.blockalign;
+    short *data = (short *) malloc(bytes_per_read);
+
+    // 3. Prepare the tracking header structure Windows forces us to use
+    WAVEHDR waveHeader;
+    waveHeader.lpData = (LPSTR)data;
+    waveHeader.dwBufferLength = bytes_per_read;
+    waveHeader.dwFlags = 0;
+
+    printf("\nPlaying via Native Windows waveOut...\n");
+
+    int bytesread;
+    while ((bytesread = fread(data, 1, bytes_per_read, infile)) > 0) {
+        waveHeader.dwBufferLength = bytesread;
+
+        // Freeze memory page for the audio hardware driver 
+        waveOutPrepareHeader(hWaveOut, &waveHeader, sizeof(WAVEHDR));
+        
+        // Push raw buffer chunk to the speakers asynchronously
+        waveOutWrite(hWaveOut, &waveHeader, sizeof(WAVEHDR));
+
+        // Because waveOut is non-blocking, we must loop-wait here until 
+        // the driver finishes processing this specific block.
+        while (!(waveHeader.dwFlags & WHDR_DONE)) {
+            Sleep(1); // Sleep 1ms to prevent 100% CPU usage
+        }
+
+        // Unfreeze the memory block
+        waveOutUnprepareHeader(hWaveOut, &waveHeader, sizeof(WAVEHDR));
+    }
+
+    // 4. Cleanup
+    free(data);
+    waveOutClose(hWaveOut);
+    fclose(infile);
+    return 0;  
+
 }
 

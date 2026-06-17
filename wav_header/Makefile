@@ -12,7 +12,7 @@ src: main.c
 
 # Rule to compile the executable
 myprogram.exe: $(src)
-	$(CC) $(CFLAGS) main.c -o myprogram.exe
+	$(CC) $(CFLAGS) main.c -o myprogram.exe -lwinmm
 
 # Rule to clean up generated files
 clean:
